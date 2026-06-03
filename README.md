@@ -39,7 +39,7 @@ git init
 git add .
 git commit -m "Initial prompt mobile tool"
 git branch -M main
-git remote add origin https://github.com/<你的用户名>/prompt-mobile-tool.git
+git remote add origin https://github.com/<你的用户名>/prompt-moblie-tool.git
 git push -u origin main
 ```
 
@@ -56,10 +56,10 @@ git push -u origin main
 当前 `vite.config.ts` 的 `base` 是：
 
 ```ts
-base: "/prompt-mobile-tool/"
+base: "/prompt-moblie-tool/"
 ```
 
-如果仓库名不是 `prompt-mobile-tool`，请把 `base` 改成实际仓库名，例如：
+如果仓库名不是 `prompt-moblie-tool`，请把 `base` 改成实际仓库名，例如：
 
 ```ts
 base: "/你的仓库名/"
@@ -72,7 +72,7 @@ base: "/你的仓库名/"
 部署后访问地址格式：
 
 ```text
-https://<你的用户名>.github.io/prompt-mobile-tool/
+https://<你的用户名>.github.io/prompt-moblie-tool/
 ```
 
 ## iPhone 添加到主屏幕
