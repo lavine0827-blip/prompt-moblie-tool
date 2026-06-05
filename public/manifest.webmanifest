@@ -2,8 +2,9 @@
   "name": "ChatGPT 图片提示词模板生成器",
   "short_name": "提示词模板",
   "start_url": "/prompt-moblie-tool/",
+  "scope": "/prompt-moblie-tool/",
   "display": "standalone",
-  "background_color": "#f6f7f9",
-  "theme_color": "#f6f7f9",
+  "background_color": "#EAF0FF",
+  "theme_color": "#336BFF",
   "lang": "zh-CN"
 }

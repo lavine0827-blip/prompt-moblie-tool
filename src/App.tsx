@@ -1,5 +1,5 @@
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
-import { buildPrompt, extractVariables, getVariableOrder, moveVariable, stripExtension } from "./prompt";
+import { buildPrompt, extractVariables, getVariableOrder, moveVariable } from "./prompt";
 import { keys, readJson, writeJson } from "./storage";
 import { defaultTemplates, PromptTemplate } from "./templates";
 import { StoredTemplates, VariableImage } from "./types";
@@ -7,6 +7,9 @@ import { StoredTemplates, VariableImage } from "./types";
 type ValuesByTemplate = Record<string, Record<string, string>>;
 type ImagesByTemplate = Record<string, Record<string, VariableImage>>;
 type OrdersByTemplate = Record<string, string[]>;
+
+const ALL_CATEGORIES = "全部";
+const READY_TEXT = "已就绪";
 
 function normalizeTemplates(value: StoredTemplates | unknown): PromptTemplate[] {
   const list = Array.isArray(value)
@@ -30,7 +33,7 @@ function normalizeTemplates(value: StoredTemplates | unknown): PromptTemplate[] 
     })
     .map((item, index) => ({
       id: item.id || `template-${index + 1}`,
-      category: item.category || item.name,
+      category: item.category || item.name || "未分类",
       name: item.name.trim() || "未命名模板",
       content: item.content
     }));
@@ -42,13 +45,24 @@ function readTemplates(): PromptTemplate[] {
   return normalizeTemplates(readJson<StoredTemplates | null>(keys.templates, null));
 }
 
+function isImageVariableName(name: string) {
+  return /(图|图片|原图|产品图|参考图|替换图|软装参考图|餐桌原图|椅子图|image|photo|img|pic|鍥)/i.test(name);
+}
+
+function getTemplateSummary(template: PromptTemplate) {
+  const clean = template.content.replace(/\s+/g, " ").trim();
+  return clean.length > 72 ? `${clean.slice(0, 72)}...` : clean || "暂无模板说明";
+}
+
 export function App() {
   const [templates, setTemplates] = useState<PromptTemplate[]>(readTemplates);
   const [selectedId, setSelectedId] = useState(() => {
+    const list = readTemplates();
     const saved = localStorage.getItem(keys.selectedTemplateId);
-    return readTemplates().some((template) => template.id === saved) ? saved! : defaultTemplates[0].id;
+    return list.some((template) => template.id === saved) ? saved! : list[0]?.id || defaultTemplates[0].id;
   });
   const [query, setQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState(ALL_CATEGORIES);
   const [valuesByTemplate, setValuesByTemplate] = useState<ValuesByTemplate>(() =>
     readJson(keys.variableValues, {})
   );
@@ -62,7 +76,7 @@ export function App() {
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false);
   const [draftTemplate, setDraftTemplate] = useState<PromptTemplate | null>(null);
-  const [toast, setToast] = useState("已就绪");
+  const [toast, setToast] = useState(READY_TEXT);
   const [draggedName, setDraggedName] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<{ name: string; position: "before" | "after" } | null>(null);
   const outputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -77,10 +91,20 @@ export function App() {
   const currentValues = valuesByTemplate[activeTemplate?.id || ""] || {};
   const currentImages = imagesByTemplate[activeTemplate?.id || ""] || {};
 
-  const filteredTemplates = templates.filter((template) => {
-    const text = `${template.category} ${template.name} ${template.content}`.toLowerCase();
-    return text.includes(query.trim().toLowerCase());
-  });
+  const categories = useMemo(
+    () => [ALL_CATEGORIES, ...Array.from(new Set(templates.map((template) => template.category || "未分类")))],
+    [templates]
+  );
+
+  const filteredTemplates = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+
+    return templates.filter((template) => {
+      const text = `${template.category} ${template.name} ${template.content}`.toLowerCase();
+      const categoryMatched = selectedCategory === ALL_CATEGORIES || template.category === selectedCategory;
+      return categoryMatched && text.includes(keyword);
+    });
+  }, [query, selectedCategory, templates]);
 
   useEffect(() => {
     writeJson(keys.templates, templates);
@@ -114,7 +138,7 @@ export function App() {
     setToast(message);
     window.clearTimeout((showToast as unknown as { timer?: number }).timer);
     (showToast as unknown as { timer?: number }).timer = window.setTimeout(() => {
-      setToast("已就绪");
+      setToast(READY_TEXT);
     }, 2200);
   }
 
@@ -153,6 +177,7 @@ export function App() {
   }
 
   function generatePrompt() {
+    if (!activeTemplate) return;
     const result = buildPrompt(activeTemplate.content, currentValues);
     setFinalPrompt(result);
     setIsEditingPrompt(false);
@@ -160,6 +185,8 @@ export function App() {
   }
 
   async function copyPrompt() {
+    if (!activeTemplate) return;
+
     const text = finalPrompt.trim() ? finalPrompt : buildPrompt(activeTemplate.content, currentValues);
     if (!finalPrompt.trim()) setFinalPrompt(text);
 
@@ -178,6 +205,7 @@ export function App() {
   }
 
   function openTemplateEditor(template = activeTemplate) {
+    if (!template) return;
     setDraftTemplate({ ...template });
     setTemplateEditorOpen(true);
   }
@@ -209,6 +237,7 @@ export function App() {
   }
 
   function deleteTemplate() {
+    if (!activeTemplate) return;
     if (templates.length <= 1) {
       showToast("至少保留一个模板");
       return;
@@ -250,6 +279,7 @@ export function App() {
         const imported = normalizeTemplates(JSON.parse(String(reader.result || "")));
         setTemplates(imported);
         setSelectedId(imported[0].id);
+        setFinalPrompt("");
         showToast("模板已导入");
       } catch {
         showToast("导入失败：JSON 格式错误");
@@ -273,7 +303,8 @@ export function App() {
           [name]: { name: file.name, dataUrl }
         }
       }));
-      if (!currentValues[name]?.trim()) updateValue(name, stripExtension(file.name));
+      updateValue(name, file.name);
+      showToast("已读取图片文件名");
     };
     reader.readAsDataURL(file);
   }
@@ -284,6 +315,8 @@ export function App() {
       delete templateImages[name];
       return { ...prev, [activeTemplate.id]: templateImages };
     });
+    updateValue(name, "");
+    showToast("图片已清除");
   }
 
   function onDragStart(name: string, event: DragEvent<HTMLDivElement>) {
@@ -311,6 +344,22 @@ export function App() {
     setDragOver(null);
   }
 
+  if (!activeTemplate) {
+    return (
+      <div className="app-shell">
+        <header className="app-header">
+          <div>
+            <p className="eyebrow">家具图片提示词</p>
+            <h1>ChatGPT 图片提示词模板生成器</h1>
+          </div>
+        </header>
+        <main className="app-main">
+          <section className="panel empty-state">暂无模板，请先导入 JSON 模板。</section>
+        </main>
+      </div>
+    );
+  }
+
   const outputHtml = finalPrompt || "生成后的提示词会显示在这里。";
 
   return (
@@ -328,7 +377,7 @@ export function App() {
           <div className="panel-head">
             <div>
               <h2>选择模板</h2>
-              <p>{templates.length} 个模板分类</p>
+              <p>{templates.length} 个模板</p>
             </div>
             <button className="ghost-btn" onClick={addTemplate}>新增</button>
           </div>
@@ -338,17 +387,36 @@ export function App() {
             placeholder="搜索模板、变量或场景"
             onChange={(event) => setQuery(event.target.value)}
           />
-          <div className="template-list">
-            {filteredTemplates.map((template) => (
+          <div className="category-tabs" aria-label="模板分类">
+            {categories.map((category) => (
               <button
-                key={template.id}
-                className={`template-card ${template.id === activeTemplate.id ? "active" : ""}`}
-                onClick={() => selectTemplate(template.id)}
+                className={`category-pill ${category === selectedCategory ? "active" : ""}`}
+                key={category}
+                onClick={() => setSelectedCategory(category)}
               >
-                <span>{template.category}</span>
-                <strong>{template.name}</strong>
+                {category}
               </button>
             ))}
+          </div>
+          <div className="template-list">
+            {filteredTemplates.map((template) => {
+              const templateVariables = extractVariables(template.content);
+              const imageSlotCount = templateVariables.filter(isImageVariableName).length;
+
+              return (
+                <button
+                  key={template.id}
+                  className={`template-card ${template.id === activeTemplate.id ? "active" : ""}`}
+                  onClick={() => selectTemplate(template.id)}
+                >
+                  <span className="template-category">{template.category}</span>
+                  <strong>{template.name}</strong>
+                  <span className="template-summary">{getTemplateSummary(template)}</span>
+                  <small>{templateVariables.length} 个变量 / {imageSlotCount} 个图片槽位</small>
+                </button>
+              );
+            })}
+            {!filteredTemplates.length && <div className="empty-state">没有找到匹配模板。</div>}
           </div>
         </section>
 
@@ -373,7 +441,7 @@ export function App() {
           <div className="panel-head sticky-head">
             <div>
               <h2>变量填写</h2>
-              <p>按变量名保存，排序不影响生成逻辑</p>
+              <p>共 {orderedVariables.length} 个变量，拖拽卡片可调整填写顺序</p>
             </div>
             <div className="inline-actions">
               <button className="ghost-btn" onClick={resetOrder}>默认排序</button>
@@ -385,55 +453,60 @@ export function App() {
             <div className="empty-state">当前模板没有变量，可直接生成提示词。</div>
           ) : (
             <div className="variable-grid">
-              {orderedVariables.map((name) => (
-                <div
-                  className={`variable-card ${
-                    draggedName === name ? "dragging" : ""
-                  } ${
-                    dragOver?.name === name ? `drag-${dragOver.position}` : ""
-                  }`}
-                  draggable
-                  key={name}
-                  onDragStart={(event) => onDragStart(name, event)}
-                  onDragOver={(event) => onDragOver(name, event)}
-                  onDragLeave={() => setDragOver(null)}
-                  onDragEnd={() => {
-                    setDraggedName(null);
-                    setDragOver(null);
-                  }}
-                  onDrop={(event) => onDrop(name, event)}
-                >
-                  <div className="variable-card-head">
-                    <span className="drag-handle">☰</span>
-                    <strong>{name}</strong>
-                    <span className="token">{`{${name}}`}</span>
-                  </div>
-                  <textarea
-                    value={currentValues[name] || ""}
-                    placeholder={`填写 ${name}`}
-                    onChange={(event) => updateValue(name, event.target.value)}
-                  />
-                  <div className="image-row">
-                    <label className="upload-btn">
-                      选择图片
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(event) => handleImage(name, event)}
-                      />
-                    </label>
-                    {currentImages[name] && (
-                      <button className="ghost-btn" onClick={() => removeImage(name)}>删除图片</button>
+              {orderedVariables.map((name) => {
+                const isImage = isImageVariableName(name);
+
+                return (
+                  <div
+                    className={`variable-card ${
+                      draggedName === name ? "dragging" : ""
+                    } ${
+                      dragOver?.name === name ? `drag-${dragOver.position}` : ""
+                    }`}
+                    data-var-name={name}
+                    draggable
+                    key={name}
+                    onDragStart={(event) => onDragStart(name, event)}
+                    onDragOver={(event) => onDragOver(name, event)}
+                    onDragLeave={() => setDragOver(null)}
+                    onDragEnd={() => {
+                      setDraggedName(null);
+                      setDragOver(null);
+                    }}
+                    onDrop={(event) => onDrop(name, event)}
+                  >
+                    <div className="variable-card-head">
+                      <span className="drag-handle">☰</span>
+                      <strong>{name}</strong>
+                      <span className="token">{`{${name}}`}</span>
+                    </div>
+                    <textarea
+                      value={currentValues[name] || ""}
+                      placeholder={`填写 ${name}`}
+                      onChange={(event) => updateValue(name, event.target.value)}
+                    />
+                    {isImage && (
+                      <div className="image-row">
+                        <label className="upload-btn">
+                          选择图片
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(event) => handleImage(name, event)}
+                          />
+                        </label>
+                        <button className="ghost-btn" onClick={() => removeImage(name)}>清除</button>
+                      </div>
+                    )}
+                    {isImage && currentImages[name] && (
+                      <figure className="image-preview">
+                        <img src={currentImages[name].dataUrl} alt={currentImages[name].name} />
+                        <figcaption>{currentImages[name].name}</figcaption>
+                      </figure>
                     )}
                   </div>
-                  {currentImages[name] && (
-                    <figure className="image-preview">
-                      <img src={currentImages[name].dataUrl} alt={currentImages[name].name} />
-                      <figcaption>{currentImages[name].name}</figcaption>
-                    </figure>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
